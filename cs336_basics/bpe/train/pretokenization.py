@@ -63,6 +63,7 @@ def pretokenize_chunk(
     end:int,
     input_path: str | os.PathLike, 
     special_tokens: list[str],
+    pretokenize_regex: re.Pattern[str] = GPT2_PRE_TOKENIZER
 )->Counter[str]:
     special_tok_pat = re.compile("| ".join(re.escape(tok) for tok in special_tokens))
     pretokens:list[str] = []
@@ -71,15 +72,26 @@ def pretokenize_chunk(
         chunk = f.read(end - start).decode("utf-8", errors="ignore")
     minichunks = re.split(special_tok_pat, chunk)
     for minichunk in minichunks:
-        pretokens.extend([match.group() for match in re.finditer(GPT2_PRE_TOKENIZER, minichunk)])
+        pretokens.extend([match.group() for match in re.finditer(pretokenize_regex, minichunk)])
     return Counter(pretokens)
 
+
+NON_WHITESPACE_PRE_TOKENIZER = re.compile(r"\S+")
+
+# used for when we want to pretokenize a string (single process)
 def pretokenize_str(
     text: str,
-    special_tokens:list[str]
+    special_tokens:list[str],
+    pretokenize_regex: re.Pattern[str] = NON_WHITESPACE_PRE_TOKENIZER
 )-> Counter[str]:
-    pass
+    special_tok_pat = re.compile("| ".join(re.escape(tok) for tok in special_tokens))
+    chunks = re.split(special_tok_pat, text)
+    pretokens:list[str] = []
+    for chunk in chunks:
+        pretokens.extend([match.group() for match in re.finditer(pretokenize_regex, chunk)])
+    return Counter(pretokens)
 
+# used for when we want to pretokenize a large file (multiple processes)
 def pretokenize(
     input_path: str | os.PathLike, 
     desired_num_processes:int, 
