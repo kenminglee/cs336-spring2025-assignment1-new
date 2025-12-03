@@ -39,6 +39,19 @@ def train_bpe_tinystories(
     write_vocab_to_file(vocab, os.path.join(output_dir, "TinyStoriesV2-GPT4-train-vocab.json"))
     write_merges_to_file(merges, os.path.join(output_dir, "TinyStoriesV2-GPT4-train-merges.txt"))
 
+def train_bpe_owt(
+    num_processes:int = 32,
+    output_dir:str=os.path.join(ROOT_DIR, "../data")
+):
+    start_time = time.time()
+    fp = os.path.join(ROOT_DIR, "../data/owt_train.txt")
+    assert os.path.isfile(fp), f"{fp} does not exist!"
+    vocab, merges = train_bpe(fp, 32000, special_tokens=["<|endoftext|>"], num_processes=num_processes)
+    elapsed_time = time.time()-start_time
+    print(f"Finished training on owt dataset, spent {int(elapsed_time // 60)} minutes and {elapsed_time % 60} seconds, now saving to disk...")
+    write_vocab_to_file(vocab, os.path.join(output_dir, "owt-train-vocab.json"))
+    write_merges_to_file(merges, os.path.join(output_dir, "owt-train-merges.txt"))
+
 if __name__=="__main__":
     print("Running bpe_example test:")
     vocab, merge = bpe_example(
@@ -56,6 +69,9 @@ if __name__=="__main__":
 
     print('Please run "uv run pytest tests/test_train_bpe.py" to test train_bpe')
 
-    print("Training BPE on TinyStories")
-    train_bpe_tinystories()
+    # print("Training BPE on TinyStories")
+    # train_bpe_tinystories()
+
+    # print("Training BPE on owt")
+    # train_bpe_owt()
     
