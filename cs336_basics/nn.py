@@ -3,7 +3,7 @@ import math
 import torch
 from torch import nn
 import einx
-from jaxtyping import Num, Integer
+from jaxtyping import Num, Integer, Float, Bool
 
 class Linear(nn.Module):
 
@@ -134,3 +134,22 @@ def softmax(tensor: torch.Tensor, dim: int) -> torch.Tensor:
     safe_x = x - torch.max(x, dim=dim, keepdim=True).values
     exp_x = torch.exp(safe_x)
     return exp_x/torch.sum(exp_x, dim=dim, keepdim=True)
+
+def scaled_dot_product_attention(
+    Q: Float[torch.Tensor, "batch_size ... seq_len d_k"],
+    K: Float[torch.Tensor, "batch_size ... seq_len d_k"],
+    V: Float[torch.Tensor, "batch_size ... seq_len d_v"],
+    mask: Bool[torch.Tensor, "... seq_len seq_len"] | None = None,
+) -> Float[torch.Tensor, "batch_size ... d_v"]:
+    assert Q.dtype==K.dtype==V.dtype==torch.float
+    # Computes QK^T / d_k^0.5
+    scaled_qk_t = einx.dot("b... seq_len_q d_k, b... seq_len_k d_k -> b... seq_len_q seq_len_k", Q, K) / math.sqrt(Q.shape[-1])
+
+    to_add = torch.zeros_like(mask, dtype=torch.float)
+    to_add[~mask] = float('-inf')
+
+    scaled_qk_t_masked = einx.add("b... seq_len_q seq_len_k, b... seq_len_q seq_len_k -> b... seq_len_q seq_len_k", scaled_qk_t, to_add)
+
+    softmaxed_weights = softmax(scaled_qk_t_masked, dim=-1)
+    
+    return einx.dot("b... seq_len_q seq_len_k, b... seq_len_k d_v -> b... seq_len_q d_v", softmaxed_weights, V)
