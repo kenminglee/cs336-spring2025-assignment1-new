@@ -94,15 +94,15 @@ class RotaryPositionalEmbedding(nn.Module):
         super().__init__()
         assert d_k%2==0, "d_k must be divisible by 2 to use RoPE"
 
-        multiplier = torch.arange(max_seq_len)
-        angle = theta ** (-2*torch.arange(d_k//2)/d_k)
+        multiplier = torch.arange(max_seq_len).float()
+        angle = theta ** (-2*torch.arange(d_k//2).float()/d_k)
         
         # broadast: (max_seq_len x 1) x (1 x d_k_half) = (max_seq_len x d_k_half)
         final_angle = einx.multiply('max_seq_len, d_k_half -> max_seq_len d_k_half', multiplier, angle).to(device=device)
         
         # persistent=False ensures that this tensor is not part of state_dict, which is okay since we can always recompute it.
-        self.register_buffer('cos_buf', torch.cos(torch.deg2rad(final_angle)), persistent=False)
-        self.register_buffer('sin_buf', torch.sin(torch.deg2rad(final_angle)), persistent=False)
+        self.register_buffer('cos_buf', torch.cos(final_angle), persistent=False)
+        self.register_buffer('sin_buf', torch.sin(final_angle), persistent=False)
         
 
     def forward(
@@ -120,12 +120,11 @@ class RotaryPositionalEmbedding(nn.Module):
         x_odd = x[..., 0]
         x_even = x[..., 1]
 
-        x_odd_new = (self.cos_buf * x_odd) + (self.sin_buf * x_even)
-        x_even_new = (self.cos_buf * x_even) - (self.sin_buf * x_odd)
-
+        x_odd_new = (cos_buf * x_odd) - (sin_buf * x_even)
+        x_even_new = (cos_buf * x_even) + (sin_buf * x_odd)
+    
         x[..., 0] = x_odd_new
         x[..., 1] = x_even_new
         
         x = einx.rearrange("b... seq_len d_k_half a -> b... seq_len (d_k_half a)", x, a=2)
         return x
-
