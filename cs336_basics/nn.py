@@ -136,10 +136,10 @@ def softmax(tensor: torch.Tensor, dim: int) -> torch.Tensor:
     return exp_x/torch.sum(exp_x, dim=dim, keepdim=True)
 
 def scaled_dot_product_attention(
-    Q: Float[torch.Tensor, "batch_size ... seq_len d_k"],
-    K: Float[torch.Tensor, "batch_size ... seq_len d_k"],
-    V: Float[torch.Tensor, "batch_size ... seq_len d_v"],
-    mask: Bool[torch.Tensor, "... seq_len seq_len"] | None = None,
+    Q: Float[torch.Tensor, "batch_size ... seq_len_q d_k"],
+    K: Float[torch.Tensor, "batch_size ... seq_len_k d_k"],
+    V: Float[torch.Tensor, "batch_size ... seq_len_k d_v"],
+    mask: Bool[torch.Tensor, "batch_size ... seq_len_q seq_len_k"] | None = None,
 ) -> Float[torch.Tensor, "batch_size ... d_v"]:
     assert Q.dtype==K.dtype==V.dtype==torch.float
     # Computes QK^T / d_k^0.5
