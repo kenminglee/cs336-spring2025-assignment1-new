@@ -123,10 +123,11 @@ class RotaryPositionalEmbedding(nn.Module):
         x_even_new = (cos_buf * x_even) - (sin_buf * x_odd)
         x_odd_new = (cos_buf * x_odd) + (sin_buf * x_even)
     
-        x[..., 0] = x_even_new
-        x[..., 1] = x_odd_new
+        out = torch.zeros_like(x)
+        out[..., 0] = x_even_new
+        out[..., 1] = x_odd_new
         
-        x = einx.rearrange("b... seq_len d_k_half a -> b... seq_len (d_k_half a)", x, a=2)
+        x = einx.rearrange("b... seq_len d_k_half a -> b... seq_len (d_k_half a)", out, a=2)
         return x
 
 def softmax(tensor: torch.Tensor, dim: int) -> torch.Tensor:
@@ -211,3 +212,18 @@ class MultiheadSelfAttentionWithRoPE(MultiheadSelfAttention):
         token_positions: Int[torch.Tensor, " ... sequence_length"] | None = None,
     ) -> Float[torch.Tensor, " ... sequence_length d_model"]:
         Q,K,V = einx.rearrange("b... seq_len (o head d_k) -> o b... head seq_len d_k", self.qkv_weights(x), head=self.num_heads, o=3)
+
+        if token_positions is None:
+            # use broadcasting: (batch head 1) x (1 seq_len) to get (batch head seq_len)
+            token_positions = torch.arange(x.shape[-2])
+            broadcast_tensor = torch.ones(Q.shape[:-2]).long()
+            token_positions = einx.multiply("b... head, seq_len -> b... head seq_len", broadcast_tensor, token_positions)
+        else:
+            # use repeat: (batch seq_len) -> (head batch seq_len), then rearrange to get (batch head seq_len) 
+            token_positions = token_positions.repeat(self.num_heads, 1, 1)
+            token_positions = einx.rearrange("head batch seq_len -> batch head seq_len", token_positions)
+        
+        rotated_q = self.rope(Q, token_positions)
+        rotated_k = self.rope(K, token_positions)
+
+        return self.compute_mhsa(rotated_q, rotated_k, V)
