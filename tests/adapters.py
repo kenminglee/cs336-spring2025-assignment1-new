@@ -149,10 +149,11 @@ def run_multihead_self_attention(
     """
     from cs336_basics.nn import MultiheadSelfAttention
     mha = MultiheadSelfAttention(d_model, num_heads)
-    qkv_weights = torch.stack((q_proj_weight, k_proj_weight, v_proj_weight), dim=0) 
+    # Weights have dimension [d_out x d_in], so we concat along dim=0 (i.e., d_out)
+    qkv_weights = torch.concat((q_proj_weight, k_proj_weight, v_proj_weight), dim=0) 
     
     mha.load_state_dict({
-        "qkv_weights":qkv_weights,
+        "qkv_weights.w":qkv_weights,
         # "q_weight.w": q_proj_weight,
         # "k_weight.w": k_proj_weight,
         # "v_weight.w": v_proj_weight,

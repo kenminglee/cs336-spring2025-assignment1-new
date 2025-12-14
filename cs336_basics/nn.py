@@ -168,34 +168,30 @@ class MultiheadSelfAttention(nn.Module):
         self.o_weight = Linear(d_model, d_model, device=device, dtype=dtype)
         self.d_model = d_model
         self.num_heads = num_heads
-
-        # self.q_weight = Linear(d_model, d_model, device=device, dtype=dtype)
-        # self.k_weight = Linear(d_model, d_model, device=device, dtype=dtype)
-        # self.v_weight = Linear(d_model, d_model, device=device, dtype=dtype)
-        qkv_weights = torch.empty((3, d_model, d_model), device=device, dtype=dtype)
-        std_dev = math.sqrt(2/(d_model+d_model))
-        mean = 0
-        qkv_weights = nn.init.trunc_normal_(qkv_weights, mean, std_dev, a=-3*std_dev, b=3*std_dev)
-        self.qkv_weights = nn.Parameter(qkv_weights, requires_grad=True)
+        self.qkv_weights = Linear(d_model, 3*d_model, device=device, dtype=dtype)
     
-    def forward(
+    def compute_mhsa(
         self,
-        x: Float[torch.Tensor, " ... sequence_length d_model"]
-    ) -> Float[torch.Tensor, " ... sequence_length d_model"]:
-
-        Q,K,V = einx.dot("o (head d_k) [d_model], b... seq_len [d_model] -> o b... head seq_len d_k", self.qkv_weights, x, head=self.num_heads, o=3)
-        # Q = einx.rearrange("b... seq_len (head d_k) -> b... head seq_len d_k", self.q_weight(x), head=self.num_heads)
-        # K = einx.rearrange("b... seq_len (head d_k) -> b... head seq_len d_k", self.k_weight(x), head=self.num_heads)
-        # V = einx.rearrange("b... seq_len (head d_k) -> b... head seq_len d_k", self.v_weight(x), head=self.num_heads)
-
-        # batch_size x head x seq_len_q x seq_len_k
+        Q: Float[torch.Tensor, "batch_size head seq_len_q d_k"],
+        K: Float[torch.Tensor, "batch_size head seq_len_k d_k"],
+        V: Float[torch.Tensor, "batch_size head seq_len_k d_v"],
+    ):
+         # batch_size x head x seq_len_q x seq_len_k
         mask = torch.ones(Q.shape[:-1]+(K.shape[-2],))
-        mask = torch.tril(mask).bool() # set lower triangular part to true
+        mask = torch.tril(mask).bool() # set upper triangular part to False
 
         attn = scaled_dot_product_attention(Q, K, V, mask=mask)
         attn = einx.rearrange("batch head seq_len_q dv -> batch seq_len_q (head dv)", attn, head=self.num_heads)
         return self.o_weight(attn)
 
+    def forward(
+        self,
+        x: Float[torch.Tensor, " ... sequence_length d_model"]
+    ) -> Float[torch.Tensor, " ... sequence_length d_model"]:
+        Q,K,V = einx.rearrange("b... seq_len (o head d_k) -> o b... head seq_len d_k", self.qkv_weights(x), head=self.num_heads, o=3)
+        return self.compute_mhsa(Q,K,V)
+
+       
 class MultiheadSelfAttentionWithRoPE(MultiheadSelfAttention):
     def __init__(
         self, 
@@ -214,4 +210,4 @@ class MultiheadSelfAttentionWithRoPE(MultiheadSelfAttention):
         x: Float[torch.Tensor, " ... sequence_length d_model"],
         token_positions: Int[torch.Tensor, " ... sequence_length"] | None = None,
     ) -> Float[torch.Tensor, " ... sequence_length d_model"]:
-        pass
+        Q,K,V = einx.rearrange("b... seq_len (o head d_k) -> o b... head seq_len d_k", self.qkv_weights(x), head=self.num_heads, o=3)
