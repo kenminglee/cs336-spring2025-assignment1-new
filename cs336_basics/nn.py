@@ -3,7 +3,7 @@ import math
 import torch
 from torch import nn
 import einx
-from jaxtyping import Num, Integer, Float, Bool
+from jaxtyping import Num, Integer, Float, Bool, Int
 
 class Linear(nn.Module):
 
@@ -153,3 +153,65 @@ def scaled_dot_product_attention(
     softmaxed_weights = softmax(scaled_qk_t_masked, dim=-1)
     
     return einx.dot("b... seq_len_q seq_len_k, b... seq_len_k d_v -> b... seq_len_q d_v", softmaxed_weights, V)
+
+
+class MultiheadSelfAttention(nn.Module):
+    def __init__(
+        self, 
+        d_model:int, 
+        num_heads:int, 
+        dtype: torch.dtype | None=None,
+        device:torch.device | None=None
+    ) -> None:
+        super().__init__()
+        assert d_model%num_heads==0, "d_model must be a multiplier of num_heads!"
+        self.o_weight = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.d_model = d_model
+        self.num_heads = num_heads
+
+        # self.q_weight = Linear(d_model, d_model, device=device, dtype=dtype)
+        # self.k_weight = Linear(d_model, d_model, device=device, dtype=dtype)
+        # self.v_weight = Linear(d_model, d_model, device=device, dtype=dtype)
+        qkv_weights = torch.empty((3, d_model, d_model), device=device, dtype=dtype)
+        std_dev = math.sqrt(2/(d_model+d_model))
+        mean = 0
+        qkv_weights = nn.init.trunc_normal_(qkv_weights, mean, std_dev, a=-3*std_dev, b=3*std_dev)
+        self.qkv_weights = nn.Parameter(qkv_weights, requires_grad=True)
+    
+    def forward(
+        self,
+        x: Float[torch.Tensor, " ... sequence_length d_model"]
+    ) -> Float[torch.Tensor, " ... sequence_length d_model"]:
+
+        Q,K,V = einx.dot("o (head d_k) [d_model], b... seq_len [d_model] -> o b... head seq_len d_k", self.qkv_weights, x, head=self.num_heads, o=3)
+        # Q = einx.rearrange("b... seq_len (head d_k) -> b... head seq_len d_k", self.q_weight(x), head=self.num_heads)
+        # K = einx.rearrange("b... seq_len (head d_k) -> b... head seq_len d_k", self.k_weight(x), head=self.num_heads)
+        # V = einx.rearrange("b... seq_len (head d_k) -> b... head seq_len d_k", self.v_weight(x), head=self.num_heads)
+
+        # batch_size x head x seq_len_q x seq_len_k
+        mask = torch.ones(Q.shape[:-1]+(K.shape[-2],))
+        mask = torch.tril(mask).bool() # set lower triangular part to true
+
+        attn = scaled_dot_product_attention(Q, K, V, mask=mask)
+        attn = einx.rearrange("batch head seq_len_q dv -> batch seq_len_q (head dv)", attn, head=self.num_heads)
+        return self.o_weight(attn)
+
+class MultiheadSelfAttentionWithRoPE(MultiheadSelfAttention):
+    def __init__(
+        self, 
+        d_model:int, 
+        num_heads:int, 
+        theta: float,
+        max_seq_len: int,
+        device:torch.device | None=None
+    ) -> None:
+        super().__init__(d_model=d_model, num_heads=num_heads, device=device)
+        d_k = d_model//num_heads
+        self.rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len)
+
+    def forward(
+        self,
+        x: Float[torch.Tensor, " ... sequence_length d_model"],
+        token_positions: Int[torch.Tensor, " ... sequence_length"] | None = None,
+    ) -> Float[torch.Tensor, " ... sequence_length d_model"]:
+        pass
