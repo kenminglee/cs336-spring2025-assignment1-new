@@ -176,7 +176,7 @@ class MultiheadSelfAttention(nn.Module):
         Q: Float[torch.Tensor, "batch_size head seq_len_q d_k"],
         K: Float[torch.Tensor, "batch_size head seq_len_k d_k"],
         V: Float[torch.Tensor, "batch_size head seq_len_k d_v"],
-    ):
+    )-> Float[torch.Tensor, "batch_size seq_len d_model"]:
          # batch_size x head x seq_len_q x seq_len_k
         mask = torch.ones(Q.shape[:-1]+(K.shape[-2],))
         mask = torch.tril(mask).bool() # set upper triangular part to False
@@ -200,9 +200,10 @@ class MultiheadSelfAttentionWithRoPE(MultiheadSelfAttention):
         num_heads:int, 
         theta: float,
         max_seq_len: int,
-        device:torch.device | None=None
+        device:torch.device | None=None,
+        dtype: torch.dtype | None = None
     ) -> None:
-        super().__init__(d_model=d_model, num_heads=num_heads, device=device)
+        super().__init__(d_model=d_model, num_heads=num_heads, device=device, dtype=dtype)
         d_k = d_model//num_heads
         self.rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len)
 
@@ -227,3 +228,36 @@ class MultiheadSelfAttentionWithRoPE(MultiheadSelfAttention):
         rotated_k = self.rope(K, token_positions)
 
         return self.compute_mhsa(rotated_q, rotated_k, V)
+
+
+class PreNormTransformerBlock(nn.Module):
+    def __init__(
+        self, 
+        d_model: int,
+        num_heads: int,
+        d_ff: int,
+        max_seq_len: int,
+        theta: float,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None
+    ):
+        super().__init__()
+        self.attn = MultiheadSelfAttentionWithRoPE(d_model, num_heads, theta, max_seq_len, device=device, dtype=dtype)
+        self.ln1 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.ln2 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.ffn = SwiGLU(d_model, d_ff, device=device, dtype=dtype)
+
+        
+    def forward(
+        self,
+        x: Float[torch.Tensor, "batch_size seq_len d_model"],
+        token_positions: Int[torch.Tensor, " ... sequence_length"] | None = None,
+    )->Float[torch.Tensor, "batch_size seq_len d_model"]:
+        ln1_out = self.ln1(x)
+        attn_out = self.attn(ln1_out, token_positions) 
+        sublayer_1_out = attn_out + x
+
+        ln2_out = self.ln2(sublayer_1_out)
+        ffn_out = self.ffn(ln2_out)
+
+        return ffn_out + sublayer_1_out
