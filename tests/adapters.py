@@ -304,7 +304,7 @@ def run_transformer_block(
         running the Transformer block on the input features while using RoPE.
     """
     from cs336_basics.nn import PreNormTransformerBlock
-    transformer_block = PreNormTransformerBlock(d_model, num_heads, d_ff, max_seq_len, theta)
+    transformer_block = PreNormTransformerBlock(d_model=d_model, num_heads=num_heads, max_seq_len=max_seq_len, theta=theta, d_ff=d_ff)
     transformer_block.load_state_dict({
         'attn.qkv_weights.w': torch.concat(
             (
@@ -403,7 +403,42 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    from cs336_basics.nn import TransformerLM
+
+    lm = TransformerLM(
+        vocab_size = vocab_size,
+        context_length = context_length,
+        num_layers = num_layers,
+        d_model = d_model,
+        num_heads = num_heads,
+        rope_theta = rope_theta,
+        d_ff = d_ff,
+    )
+    state_dict = {
+        'token_embeddings.embed_mat': weights['token_embeddings.weight'],
+        'ln_final.g': weights['ln_final.weight'],
+        'lm_head.w': weights['lm_head.weight']
+    }
+    for layer in range(num_layers):
+        state_dict.update({
+            f'layers.{layer}.attn.qkv_weights.w':torch.concat(
+                (
+                    weights[f'layers.{layer}.attn.q_proj.weight'], 
+                    weights[f'layers.{layer}.attn.k_proj.weight'], 
+                    weights[f'layers.{layer}.attn.v_proj.weight'], 
+                ), 
+                dim=0
+            ),
+            f'layers.{layer}.attn.o_weight.w' : weights[f'layers.{layer}.attn.output_proj.weight'],
+            f'layers.{layer}.ln1.g': weights[f'layers.{layer}.ln1.weight'],
+            f'layers.{layer}.ln2.g': weights[f'layers.{layer}.ln2.weight'],
+            f'layers.{layer}.ffn.w1.w': weights[f'layers.{layer}.ffn.w1.weight'],
+            f'layers.{layer}.ffn.w2.w': weights[f'layers.{layer}.ffn.w2.weight'],
+            f'layers.{layer}.ffn.w3.w': weights[f'layers.{layer}.ffn.w3.weight'],
+        })
+    lm.load_state_dict(state_dict)
+    return lm(in_indices)
+
 
 
 def run_rmsnorm(

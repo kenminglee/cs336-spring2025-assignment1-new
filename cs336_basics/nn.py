@@ -235,9 +235,9 @@ class PreNormTransformerBlock(nn.Module):
         self, 
         d_model: int,
         num_heads: int,
-        d_ff: int,
         max_seq_len: int,
         theta: float,
+        d_ff: int | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None
     ):
@@ -245,13 +245,13 @@ class PreNormTransformerBlock(nn.Module):
         self.attn = MultiheadSelfAttentionWithRoPE(d_model, num_heads, theta, max_seq_len, device=device, dtype=dtype)
         self.ln1 = RMSNorm(d_model, device=device, dtype=dtype)
         self.ln2 = RMSNorm(d_model, device=device, dtype=dtype)
-        self.ffn = SwiGLU(d_model, d_ff, device=device, dtype=dtype)
+        self.ffn = SwiGLU(d_model, d_ff=d_ff, device=device, dtype=dtype)
 
         
     def forward(
         self,
         x: Float[torch.Tensor, "batch_size seq_len d_model"],
-        token_positions: Int[torch.Tensor, " ... sequence_length"] | None = None,
+        token_positions: Int[torch.Tensor, " ... seq_len"] | None = None,
     )->Float[torch.Tensor, "batch_size seq_len d_model"]:
         ln1_out = self.ln1(x)
         attn_out = self.attn(ln1_out, token_positions) 
@@ -262,3 +262,50 @@ class PreNormTransformerBlock(nn.Module):
         sublayer_2_out = ffn_out + sublayer_1_out
 
         return sublayer_2_out
+
+class TransformerLM(nn.Module):
+    def __init__(
+        self,
+        vocab_size: int,
+        context_length: int, # determines max-seq-len
+        num_layers: int, # number of transformer blocks
+        d_model: int,
+        num_heads: int,
+        rope_theta: float, # constant for RoPE
+        d_ff: int | None = None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None
+    ) -> None:
+        super().__init__()
+        self.context_length = context_length
+        self.token_embeddings = Embedding(num_embeddings=vocab_size, embedding_dim=d_model, device=device, dtype=dtype)
+        layers = []
+        for _ in range(num_layers):
+            layers.append(PreNormTransformerBlock(
+                d_model = d_model,
+                num_heads = num_heads,
+                max_seq_len = context_length,
+                theta = rope_theta,
+                d_ff = d_ff,
+                device = device,
+                dtype = dtype
+            ))
+        self.layers = nn.ModuleList(layers) # ensures that all transformer blocks are properly registered
+        self.ln_final = RMSNorm(d_model=d_model, device=device, dtype=dtype)
+        self.lm_head = Linear(d_model, vocab_size, device=device, dtype=dtype)
+
+    def forward(
+        self,
+        token_ids: Int[torch.Tensor, "batch_size seq_len"],
+        token_positions: Int[torch.Tensor, "batch_size seq_len"] | None = None,
+    )->Float[torch.Tensor, "batch_size seq_len vocab_size"]:
+        assert token_ids.shape[-1]<=self.context_length, "Input is too long!"
+        # x.shape = (batch_size seq_len d_model)
+        x = self.token_embeddings(token_ids)
+        for transformer_block in self.layers:
+            x = transformer_block(x, token_positions)
+        x = self.ln_final(x)
+        # x.shape after lm_head: (batch_size seq_len vocab)
+        x = self.lm_head(x)
+        return x
+        
