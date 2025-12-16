@@ -1,9 +1,11 @@
 import math
+from collections.abc import Callable
 
 import torch
 from torch import nn
 import einx
 from jaxtyping import Num, Integer, Float, Bool, Int
+from torch.optim.optimizer import ParamsT
 
 class Linear(nn.Module):
 
@@ -321,4 +323,49 @@ def cross_entropy_loss(
     logits_at_target = einx.get_at("batch_size [vocab], (batch_size [1]) -> batch_size", logits, target_indices)
     
     return (logits_logsumexp - logits_at_target).mean()
+
+
+class AdamW(torch.optim.Optimizer):
+    def __init__(
+        self, 
+        params: ParamsT, 
+        lr: float,
+        weight_decay: float,
+        betas: tuple[float, float] = (0.9, 0.95),
+        eps: float = 1e-8,
+    ) -> None:
+        if lr < 0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        defaults = {
+            "alpha":lr,
+            "lambda":weight_decay,
+            "beta_1":betas[0],
+            "beta_2":betas[1],
+            "epsilon":eps
+        }
+        super().__init__(params, defaults)
+    
+    def step(self, closure: Callable | None = None):
+        loss = None if closure is None else closure()
+        for group in self.param_groups:
+            alpha, lamb, beta_1, beta_2, eps = group["alpha"], group["lambda"], group["beta_1"], group["beta_2"], group["epsilon"] # fetch hyperparameters
+            for p in group["params"]:
+                if p.grad is None: continue
+                # Get state for this parameter
+                state = self.state[p]
+                # Get the gradient of loss with respect to p.
+                grad = p.grad.data 
+                # Update timestep
+                t = state["t"] = state.get("t", 0) + 1
+                # Update first moment estimate
+                m = state["m"] =  beta_1 * state.get("m", torch.zeros_like(p)) + (1-beta_1)*grad
+                # Update second moment estimate
+                v = state["v"] = beta_2*state.get("v", torch.zeros_like(p)) + (1-beta_2)*(grad**2)
+                # Compute adjusted alpha for iteration t
+                alpha_t = alpha * math.sqrt(1-beta_2**t) / (1 - beta_1**t)
+                # Update parameter
+                p.data -= alpha_t * m / (torch.sqrt(v) + eps)
+                # Apply weight decay
+                p.data -= alpha * lamb * p.data
+        return loss
 
