@@ -306,3 +306,19 @@ class TransformerLM(nn.Module):
         x = self.lm_head(x)
         return x
         
+def cross_entropy_loss(
+    logits: Float[torch.Tensor, "batch_size ... vocab_size"],
+    target_indices: Int[torch.Tensor, "batch_size ..."]
+)-> Float[torch.Tensor, ""]:
+    
+    # flatten if needed
+    logits = einx.rearrange("batch_size ... vocab -> (batch_size ...) vocab", logits)
+    target_indices = einx.rearrange("batch_size ... -> (batch_size ...)", target_indices)
+
+    logits = logits - torch.max(logits, dim=-1, keepdim=True).values
+    logits_logsumexp = torch.log(logits.exp().sum(dim=-1))
+
+    logits_at_target = einx.get_at("batch_size [vocab], (batch_size [1]) -> batch_size", logits, target_indices)
+    
+    return (logits_logsumexp - logits_at_target).mean()
+
