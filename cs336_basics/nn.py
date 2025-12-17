@@ -1,5 +1,5 @@
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 import torch
 from torch import nn
@@ -374,3 +374,33 @@ class AdamW(torch.optim.Optimizer):
                 p.data -= alpha * lamb * p.data
         return loss
 
+
+def cosine_lr_schedule(
+    it: int,
+    max_learning_rate: float,
+    min_learning_rate: float,
+    warmup_iters: int,
+    cosine_cycle_iters: int,
+):
+    assert cosine_cycle_iters > warmup_iters
+    if it<warmup_iters:
+        return (it/warmup_iters) * max_learning_rate
+    elif it>cosine_cycle_iters:
+        return min_learning_rate
+    else: # warmup_iters <= it <= cosine_cycle_iters
+        anneal_portion = 0.5*(1+math.cos(math.pi * (it - warmup_iters)/(cosine_cycle_iters - warmup_iters)))
+        return min_learning_rate + anneal_portion * (max_learning_rate - min_learning_rate)
+
+
+def clip_gradient(
+    parameters: Iterable[torch.nn.Parameter], 
+    max_l2_norm: float,
+    eps: float = 1e-6 # for numerical stability
+) -> None:
+    flattened_params = torch.concat([param.grad.flatten() for param in parameters if param.grad is not None])
+    l2_norm = torch.sqrt(flattened_params.square().sum())
+    if l2_norm >= max_l2_norm:
+        for param in parameters:
+            if param.grad is not None:
+                param.grad *= max_l2_norm/(l2_norm + eps)
+    
