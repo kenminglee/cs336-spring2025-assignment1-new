@@ -9,6 +9,8 @@ import einx
 from jaxtyping import Num, Integer, Float, Bool, Int
 from torch.optim.optimizer import ParamsT
 
+from cs336_basics.bpe.tokenization import Tokenizer
+
 class Linear(nn.Module):
 
     def __init__(
@@ -135,10 +137,10 @@ class RotaryPositionalEmbedding(nn.Module):
         x = einx.rearrange("b... seq_len d_k_half a -> b... seq_len (d_k_half a)", out, a=2)
         return x
 
-def softmax(tensor: torch.Tensor, dim: int) -> torch.Tensor:
+def softmax(tensor: torch.Tensor, dim: int, temperature:float=1.0) -> torch.Tensor:
     x = tensor
     safe_x = x - torch.max(x, dim=dim, keepdim=True).values
-    exp_x = torch.exp(safe_x)
+    exp_x = torch.exp(safe_x/temperature)
     return exp_x/torch.sum(exp_x, dim=dim, keepdim=True)
 
 def scaled_dot_product_attention(
@@ -357,7 +359,8 @@ class AdamW(torch.optim.Optimizer):
         for group in self.param_groups:
             alpha, lamb, beta_1, beta_2, eps = group["alpha"], group["lambda"], group["beta_1"], group["beta_2"], group["epsilon"] # fetch hyperparameters
             for p in group["params"]:
-                if p.grad is None: continue
+                if p.grad is None: 
+                    continue
                 # Get state for this parameter
                 state = self.state[p]
                 # Get the gradient of loss with respect to p.
@@ -433,3 +436,65 @@ def load_checkpoint(
     if auxiliary_info is not None:
         auxiliary_info.update({k:v for k,v in checkpoint.items() if k not in {"model","optimizer","iteration"}})
     return checkpoint["iteration"]
+
+def top_k_sampling(
+    k: int
+) -> Callable[[Float[torch.Tensor, "batch vocab_size"], torch.Generator], Int[torch.Tensor, " batch "]]:
+    """
+        Idea of top-k sampling: only sample from the top k vocab in terms of probability.
+    """
+    def sample(probs: Float[torch.Tensor, "batch vocab_size"], generator: torch.Generator) -> Int[torch.Tensor, " batch "]:
+        sorted_idx = torch.argsort(probs, dim=-1)
+        # since argsort in ascending order, the last k indices are what we want to sample from.
+        # So omit the last k indices, and zero out everything else before sampling
+        indices_to_zero_out = sorted_idx[..., :-k]
+        chosen_candidates = torch.scatter(probs, dim=-1, index=indices_to_zero_out, value=.0)
+        new_normalized_proba = softmax(chosen_candidates, -1)
+        return torch.multinomial(new_normalized_proba, 1, generator=generator).squeeze(1)
+
+
+def nucleus_sampling(
+    p: int
+) -> Callable[[Float[torch.Tensor, "... vocab_size"], torch.Generator], Int[torch.Tensor, " batch "]]:
+    """
+        Nucleus, or top-p sampling: Only want to sample from the (smallest possible) subset whose cumulative sum of probability is larger than p.
+        e.g., if we have a vocab size of 5, and p=0.8
+        probs: [0.5, 0.3, 0.15, 0.03, 0.02]
+        we want to only sample from the first 2 vocab, as the first 2 vocab forms the smallest subset possible whose cumulative sum is larger or equals to 0.8.
+
+        To do this in a batch -- probs with dimension batch x vocab_size, the trick is to perform masking, and to do it from the other way around, i.e., sort probs in ascending order, and deselect largest subset possible whose cumulative sum is smaller or equals to 1-p
+    """
+    assert 0 <= p <= 1    
+    def sample(probs: Float[torch.Tensor, "batch vocab_size"], generator: torch.Generator) -> Int[torch.Tensor, " batch "]:
+        # each row of sorted_idx shows index of ascending order probs for that row
+        sorted_idx = torch.argsort(probs, dim=-1)
+        # sort each row of probs by ascending order
+        sorted_probs = torch.take_along_dim(probs, dim=-1, indices=sorted_idx)
+        # take cumulative sum of each row
+        sorted_probs_cumsum = torch.cumsum(sorted_probs, dim=-1)
+        # assign cumulative sum back to the original unsorted probs
+        probs_cumsum = torch.scatter(probs, dim=-1, index=sorted_idx, src=sorted_probs_cumsum)
+        # only keep those whose cumsum > 1-p
+        probs[probs_cumsum <= (1-p)] = float('-inf')
+        # renormalize remaining vocab that we want to sample from
+        new_normalized_proba = softmax(probs, dim=-1)
+        return torch.multinomial(new_normalized_proba, 1, generator=generator).squeeze(1)
+    return sample
+
+
+        
+
+def generate_text(
+    prompt: str,
+    tokenizer: Tokenizer, 
+    model: TransformerLM,
+    generator: torch.Generator,
+    sampling_fn: Callable[[Float[torch.Tensor, "... vocab_size"], torch.Generator], Int[torch.Tensor, " batch "]],
+    max_num_tokens: int = -1, # if -1, generate until <|endoftext|> token
+) -> Float[torch.Tensor, " vocab_size "]:
+    """
+    Given a prompt, convert prompt into tokens, and feed into LM. Autoregressively sample the distribution over vocab for the predicted next word and feed in the most probable word back into the input.
+    Keep generating until we receive <|endoftext|> or reach max_num_tokens.
+    """
+    pass
+    
