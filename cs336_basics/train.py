@@ -1,20 +1,19 @@
 from dataclasses import dataclass
 import os
-from os.path import isfile
 from typing import Literal
 import random
 import time
 
 import torch
 import numpy as np
-from jaxtyping import Float, Int 
+from jaxtyping import Int 
 import tyro
 import wandb
 from tqdm import tqdm
 
 from cs336_basics import ROOT_DIR
 from cs336_basics.bpe.tokenization import Tokenizer
-from cs336_basics.nn import TransformerLM, cross_entropy_loss, AdamW, load_checkpoint, save_checkpoint
+from cs336_basics.nn import TransformerLM, cross_entropy_loss, AdamW, load_checkpoint, save_checkpoint, cosine_lr_schedule, generate_text
 
 
 def tokenize_dataset(
@@ -68,7 +67,7 @@ def tokenize_dataset(
     return tokens_mm
 
 def sample_batch(
-    dataset: Int[np.ndarray, "num_tokens"],  # noqa: F821
+    dataset: Int[np.ndarray, " num_tokens "], 
     batch_size: int, 
     context_length: int, 
     device: str,
@@ -123,6 +122,7 @@ class Args:
     """Number of transformer heads"""
 
     lr: float = 1e-3
+    """Overriden if cosine-lr-schedule is used"""
     weight_decay: float = 0.01
     beta_1: float = 0.9
     beta_2: float = 0.999
@@ -132,20 +132,36 @@ class Args:
     batch_size: int = 64
     training_steps: int = 1500
     """Number of training steps. Each training step involves batch_size x context_length number of tokens"""
-    
+    log_freq: int = 5
+    """How often to log metrics to WandB (steps/log)"""
+    param_log_freq: int = 50
+    """How often to log gradients and weights to WandB (steps/log)"""
+
+    cosine_lr_schedule: bool = False
+    """Toggle to use Cosine LR schedule"""
+    max_lr: float = 1.0
+    """[Only used when cosine_lr_schedule is true] Max LR """
+    min_lr: float = 1e-5
+    """[Only used when cosine_lr_schedule is true] Min LR """
+    warmup_iters: int = 100
+    """[Only used when cosine_lr_schedule is true] Number of warmup iterations to take to get to Max LR """
+    cosine_cycle_iters: int = 1000
+    """[Only used when cosine_lr_schedule is true] Number of iterations to use cosine annealing from Max LR to Min LR. After cosine_cycle_iters, go back to only Min LR """
 
 
-def train():
-    args = tyro.cli(Args)
+def train(args: Args):
+    args.device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     train_rng = np.random.default_rng(args.seed)
     valid_rng = np.random.default_rng(args.seed)
+    torch_gen = torch.Generator(device=args.device)
+    torch_gen.manual_seed(args.seed)
+
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
-    args.device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     if "TinyStories" in args.dataset:
         vocab_path = os.path.join(ROOT_DIR, "../data/TinyStoriesV2-GPT4-train-vocab.json")
@@ -175,7 +191,7 @@ def train():
     tokenizer = Tokenizer.from_files(
         vocab_path, merges_path, ["<|endoftext|>"]
     )
-
+    
     if not os.path.isfile(tokenized_train_dataset_path):
         print("Tokenized training dataset not found! tokenizing dataset now...")
         train_data = tokenize_dataset(train_dataset_path, tokenizer, tokenized_train_dataset_path)
@@ -209,7 +225,7 @@ def train():
     )
     optimizer = AdamW(
         model.parameters(), 
-        args.lr, 
+        lr:=args.lr, 
         args.weight_decay, 
         (args.beta_1, args.beta_2)
     )
@@ -242,10 +258,15 @@ def train():
             name=run_name,
             save_code=False,
         )
-
-    run.watch(model, log="all")
+    # model.compile()
     checkpoint = args.training_steps // args.num_checkpoints
+    run.watch(model, log="all", log_freq=args.param_log_freq)
+    validation_table = wandb.Table(columns=["step","prompt", "prediction"], log_mode="INCREMENTAL")
     for step in tqdm(range(start_step, args.training_steps+1), desc="Training step"):
+        if args.cosine_lr_schedule:
+            lr = cosine_lr_schedule(step, args.max_lr, args.min_lr, args.warmup_iters, args.cosine_cycle_iters)
+            optimizer.update_lr(lr)
+
         x, y = sample_batch(train_data, args.batch_size, args.context_length, args.device, rng=train_rng)
         pred = model(x)
         loss = cross_entropy_loss(pred, y)
@@ -254,17 +275,24 @@ def train():
         loss.backward()
         optimizer.step()
 
-        run.log({"train/loss": loss.detach().cpu()}, step=step)
+        if step%args.log_freq==0:
+            run.log({"train/loss": loss.detach().cpu(), "train/lr":lr}, step=step)
 
         if step%checkpoint==0:
             with torch.no_grad():
                 x, y = sample_batch(validation_data, args.batch_size, args.context_length, args.device, rng=valid_rng)
                 valid_loss = cross_entropy_loss(model(x), y)
-                run.log({"valid/loss": valid_loss.detach().cpu()}, step=step)
+
+                text = generate_text("Once upon a time", tokenizer, model, torch_gen, max_num_tokens=200, device=args.device)
+                validation_table.add_data(step, "Once upon a time", text)
+
+                run.log({"valid/loss": valid_loss.detach().cpu(), "valid/generation":validation_table}, step=step)
+
             save_checkpoint(model, optimizer, step, os.path.join(save_path, f"model_{step}.pt"), wandb_id=run.id, run_name=run_name)
 
         
 if __name__=="__main__":
-    train()
+    args = tyro.cli(Args)
+    train(args)
 
 

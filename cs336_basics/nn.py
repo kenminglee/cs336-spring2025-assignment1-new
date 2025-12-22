@@ -8,6 +8,7 @@ from torch import nn
 import einx
 from jaxtyping import Num, Integer, Float, Bool, Int
 from torch.optim.optimizer import ParamsT
+from tqdm import tqdm
 
 from cs336_basics.bpe.tokenization import Tokenizer
 
@@ -346,7 +347,7 @@ class AdamW(torch.optim.Optimizer):
         if lr < 0:
             raise ValueError(f"Invalid learning rate: {lr}")
         defaults = {
-            "alpha":lr,
+            "lr":lr,
             "lambda":weight_decay,
             "beta_1":betas[0],
             "beta_2":betas[1],
@@ -357,7 +358,7 @@ class AdamW(torch.optim.Optimizer):
     def step(self, closure: Callable | None = None):
         loss = None if closure is None else closure()
         for group in self.param_groups:
-            alpha, lamb, beta_1, beta_2, eps = group["alpha"], group["lambda"], group["beta_1"], group["beta_2"], group["epsilon"] # fetch hyperparameters
+            alpha, lamb, beta_1, beta_2, eps = group["lr"], group["lambda"], group["beta_1"], group["beta_2"], group["epsilon"] # fetch hyperparameters
             for p in group["params"]:
                 if p.grad is None: 
                     continue
@@ -378,6 +379,10 @@ class AdamW(torch.optim.Optimizer):
                 # Apply weight decay
                 p.data -= alpha * lamb * p.data
         return loss
+    
+    def update_lr(self, new_lr: float) -> None:
+        for group in self.param_groups:
+            group["lr"] = new_lr
 
 
 def cosine_lr_schedule(
@@ -386,7 +391,7 @@ def cosine_lr_schedule(
     min_learning_rate: float,
     warmup_iters: int,
     cosine_cycle_iters: int,
-):
+) -> float:
     assert cosine_cycle_iters > warmup_iters
     if it<warmup_iters:
         return (it/warmup_iters) * max_learning_rate
@@ -490,12 +495,37 @@ def generate_text(
     tokenizer: Tokenizer, 
     model: TransformerLM,
     generator: torch.Generator,
-    sampling_fn: Callable[[Float[torch.Tensor, "... vocab_size"], torch.Generator], Int[torch.Tensor, " batch "]],
-    max_num_tokens: int = -1, # if -1, generate until <|endoftext|> token
-) -> Float[torch.Tensor, " vocab_size "]:
+    softmax_temperature: float = 1.0,
+    sampling_fn: Callable[[Float[torch.Tensor, "... vocab_size"], torch.Generator], Int[torch.Tensor, " batch "]] = nucleus_sampling(0.9),
+    max_num_tokens: int = 250, 
+    device: torch.device | None = None,
+) -> str:
     """
     Given a prompt, convert prompt into tokens, and feed into LM. Autoregressively sample the distribution over vocab for the predicted next word and feed in the most probable word back into the input.
     Keep generating until we receive <|endoftext|> or reach max_num_tokens.
     """
-    pass
+    assert max_num_tokens > 0
+    context = tokenizer.encode(prompt)
+
+    termination_tokenIDs = tokenizer.encode("<|endoftext|>")
+    assert len(termination_tokenIDs)==1, "special token must be added to vocab as a unique word"
+    termination_token = termination_tokenIDs[0]
+    sampled_tokens = 0  
+    # conditions: keep sampling if not yet reached termination token, or not yet reached max_num_tokens(if exist), or 
+    for i in tqdm(range(max_num_tokens), desc="Generating Tokens"):
+        if context[-1]==termination_token:
+            tqdm.write(f"Reached termination at token {i}; breaking the loop...")
+            break
+        # model output dim: batch_size x seq_len x vocab_size
+        # we only take the last word of the 1st batch
+        possible_next_tokens: Float[torch.Tensor, "1 vocab_size"] = model(torch.tensor(context[-model.context_length:], device=device).unsqueeze(dim=0))[0,-1, None] 
+        probs = softmax(possible_next_tokens, dim=-1, temperature=softmax_temperature)
+        next_tokenID = sampling_fn(probs, generator)[0].item()
+        context.append(next_tokenID)
+        sampled_tokens += 1
+
+    return tokenizer.decode(context[-sampled_tokens:])
+        
+
+
     
