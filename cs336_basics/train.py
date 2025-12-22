@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from cs336_basics import ROOT_DIR
 from cs336_basics.bpe.tokenization import Tokenizer
-from cs336_basics.nn import TransformerLM, cross_entropy_loss, AdamW, load_checkpoint, save_checkpoint, cosine_lr_schedule, generate_text
+from cs336_basics.nn import TransformerLM, cross_entropy_loss, AdamW, load_checkpoint, save_checkpoint, cosine_lr_schedule, generate_text, nucleus_sampling, clip_gradient
 
 
 def tokenize_dataset(
@@ -100,7 +100,7 @@ class Args:
     resume: bool = False
     """if toggled, will resume training"""
     checkpoint_path: str | None = None
-    """Path to .pt or .pth file. Only takes effect if resume=True; if resuming training, this must be set"""
+    """[Only used when resume is true] Path to .pt or .pth file"""
     
 
     dataset: Literal["TinyStories", "OpenWebText", "TinyStories-Sample-Small", "TinyStories-Sample-5M"] = "TinyStories-Sample-Small"
@@ -108,7 +108,9 @@ class Args:
     wandb_project_name: str = "cs336-a1"
     """the wandb's project name"""
     run_name: str | None = None
-    """Optional run name"""
+    """Optional run name; ignored when resuming a run"""
+    notes: str | None = None
+    """Optional notes on this run (logged to WandB); ignored when resuming a run"""
 
     context_length: int = 256
     d_model : int = 512
@@ -147,6 +149,15 @@ class Args:
     """[Only used when cosine_lr_schedule is true] Number of warmup iterations to take to get to Max LR """
     cosine_cycle_iters: int = 1000
     """[Only used when cosine_lr_schedule is true] Number of iterations to use cosine annealing from Max LR to Min LR. After cosine_cycle_iters, go back to only Min LR """
+
+    softmax_temp: float = 1.0
+    """temperature for softmax; only used when generating text during validation"""
+    top_p: float = 0.9
+    """P value for top-P sampling; only used when generating text during validation. Must be between 0 and 1"""
+
+    max_gradient_norm: float = -1
+    """Clip norm of gradient to this value. No clipping when set to -1."""
+
 
 
 def train(args: Args):
@@ -257,6 +268,7 @@ def train(args: Args):
             group=args.dataset,
             name=run_name,
             save_code=False,
+            notes=args.notes
         )
     # model.compile()
     checkpoint = args.training_steps // args.num_checkpoints
@@ -273,6 +285,8 @@ def train(args: Args):
         
         optimizer.zero_grad()
         loss.backward()
+        if args.max_gradient_norm!=-1:
+            clip_gradient(model.parameters(), args.max_gradient_norm)
         optimizer.step()
 
         if step%args.log_freq==0:
@@ -283,7 +297,7 @@ def train(args: Args):
                 x, y = sample_batch(validation_data, args.batch_size, args.context_length, args.device, rng=valid_rng)
                 valid_loss = cross_entropy_loss(model(x), y)
 
-                text = generate_text("Once upon a time", tokenizer, model, torch_gen, max_num_tokens=200, device=args.device)
+                text = generate_text("Once upon a time", tokenizer, model, torch_gen, max_num_tokens=200, device=args.device, sampling_fn=nucleus_sampling(args.top_p), softmax_temperature=args.softmax_temp)
                 validation_table.add_data(step, "Once upon a time", text)
 
                 run.log({"valid/loss": valid_loss.detach().cpu(), "valid/generation":validation_table}, step=step)
