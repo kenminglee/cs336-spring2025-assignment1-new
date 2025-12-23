@@ -1,0 +1,45 @@
+command:
+- ${interpreter}
+- ${program}
+- ${args} # params to tune 
+- --seed=0
+- --torch-deterministic
+- --cuda
+- --dataset=TinyStories
+- --context-length=256
+- --d-model=512
+- --d-ff=1344
+- --theta=10000
+- --num-layers=4
+- --num-heads=16
+- --log-freq=10
+- --param-log-freq=100
+- --max-gradient-norm=2.0
+- --tokens-processing-budget=40960000
+- --batch-size=32
+- --weight-decay=0
+- --beta_2=0.999
+- --num-checkpoints=5
+- --cosine_lr_schedule
+method: bayes
+metric:
+  goal: minimize
+  name: valid/loss
+parameters:
+  max_lr:
+    distribution: uniform
+    max: 1.0
+    min: 0.01
+  min_lr:
+    distribution: uniform
+    max: 0.01
+    min: 0.0005
+  warmup_iters:
+    distribution: int_uniform
+    max: 2000
+    min: 100
+  cosine_cycle_iters:
+    distribution: int_uniform
+    max: 4900
+    min: 2000
+program: cs336_basics/train.py
