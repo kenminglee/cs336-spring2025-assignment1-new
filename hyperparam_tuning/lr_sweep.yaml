@@ -17,16 +17,15 @@ command:
 - --max-gradient-norm=2.0
 - --tokens-processing-budget=40960000
 - --batch-size=32
-- --weight-decay=0
+- --weight-decay=0.001
 - --beta_2=0.999
 - --num-checkpoints=5
-method: bayes
+method: grid
 metric:
   goal: minimize
   name: valid/loss
 parameters:
   lr:
-    distribution: log_uniform_values
-    max: 0.8
-    min: 0.0005
+    distribution: categorical
+    values: [0.0005, 0.001, 0.01, 0.1, 0.5, 1.0]
 program: cs336_basics/train.py
