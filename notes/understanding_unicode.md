@@ -28,10 +28,18 @@ Note on how UTF-8 encoding works:
     - 4 bytes: `11110xxx 10xxxxxx 10xxxxxx 10xxxxxx`
     - The amount of ones in the first byte (from the left) tells you how many of the following bytes still belong to the same character. All bytes that belong to the sequence start with 10 in binary. To encode the character you convert its codepoint to binary and fill in the x’s.
 
-1. Generally speaking, the advantage of training on UTF-8 encoded bytes (2-bytes, or 8 bits per token), is that our values are much denser (less wastage, since all english characters falls into the range of 0-255). The disadvantage is that for characters outside the range of 0-255, it takes multiple 2-byte tokens to represent a single character, so then a sentence may result in a long sequence of tokens.
+1. Reasons for prefering training on UTF-8 encoded bytes rather than UTF-16 or UTF-32:
+Generally speaking, the advantage of training on UTF-8 encoded bytes (2-bytes, or 8 bits per token), is that our values are much denser (less wastage, since all english characters falls into the range of 0-255). The disadvantage is that for characters outside the range of 0-255, it takes multiple 2-byte tokens to represent a single character, so then a sentence may result in a long sequence of tokens.
 Additionally, the probability of outputting invalid characters may be larger?
 
-2. This function does not work because some characters take multiple bytes to be represented!
+2. Consider the following (incorrect) function, which is intended to decode a UTF-8 byte string into a Unicode string:
+```python
+def decode_utf8_bytes_to_str_wrong(bytestring: bytes):
+  return "".join([bytes([b]).decode("utf-8") for b in bytestring])
+```
+Why is this function incorrect? Provide an example.
+
+This function does not work because some characters take multiple bytes to be represented!
 ```
 >>> decode_utf8_bytes_to_str_wrong("hello".encode("utf-8"))
 'hello'
@@ -44,4 +52,5 @@ Traceback (most recent call last):
 UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe4 in position 0: unexpected end of data
 ```
 
-3. `01111111 10111111` is an invalid two-byte sequence that does not decode to any Unicode character. That's because the second byte starts with a `10`, which is a pattern to represent continuation byte (see above for explaination). However, the 1st byte starts with `0`, which means the unicode character only contains 1 byte. Hence the 2nd byte is a stray continuation byte (that is invalid).  (a) 
+3. An example of a two-byte sequence that does not decode to any Unicode character(s): 
+`01111111 10111111` is an invalid two-byte sequence that does not decode to any Unicode character. That's because the second byte starts with a `10`, which is a pattern to represent continuation byte (see above for explaination). However, the 1st byte starts with `0`, which means the unicode character only contains 1 byte. Hence the 2nd byte is a stray continuation byte (that is invalid).  (a) 
