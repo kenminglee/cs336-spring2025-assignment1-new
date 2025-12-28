@@ -271,6 +271,37 @@ class PreNormTransformerBlock(nn.Module):
 
         return sublayer_2_out
 
+class PostNormTransformerBlock(nn.Module):
+    def __init__(
+        self, 
+        d_model: int,
+        num_heads: int,
+        max_seq_len: int,
+        theta: float,
+        d_ff: int | None = None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None
+    ):
+        super().__init__()
+        self.attn = MultiheadSelfAttentionWithRoPE(d_model, num_heads, theta, max_seq_len, device=device, dtype=dtype)
+        self.ln1 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.ln2 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.ffn = SwiGLU(d_model, d_ff=d_ff, device=device, dtype=dtype)
+
+        
+    def forward(
+        self,
+        x: Float[torch.Tensor, "batch_size seq_len d_model"],
+        token_positions: Int[torch.Tensor, " ... seq_len"] | None = None,
+    )->Float[torch.Tensor, "batch_size seq_len d_model"]:
+        attn_out = self.attn(x, token_positions) 
+        sublayer_1_out = self.ln1(attn_out + x)
+
+        ffn_out = self.ffn(sublayer_1_out)
+        sublayer_2_out = self.ln2(ffn_out + sublayer_1_out)
+
+        return sublayer_2_out
+
 class TransformerLM(nn.Module):
     def __init__(
         self,
