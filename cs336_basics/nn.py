@@ -162,7 +162,7 @@ def scaled_dot_product_attention(
     V: Float[torch.Tensor, "batch_size ... seq_len_k d_v"],
     mask: Bool[torch.Tensor, "batch_size ... seq_len_q seq_len_k"] | None = None,
 ) -> Float[torch.Tensor, "batch_size ... d_v"]:
-    assert Q.dtype==K.dtype==V.dtype==torch.float
+    # assert Q.dtype==K.dtype==V.dtype==torch.float
     # Computes QK^T / d_k^0.5
     scaled_qk_t = einx.dot("b... seq_len_q d_k, b... seq_len_k d_k -> b... seq_len_q seq_len_k", Q, K) / math.sqrt(Q.shape[-1])
 
