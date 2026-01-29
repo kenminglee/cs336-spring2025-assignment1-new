@@ -132,7 +132,7 @@ class Args:
     beta_2: float = 0.999
 
     num_checkpoints: int = 10
-    save_path: str = os.path.join(ROOT_DIR, "../runs")
+    save_path: str = os.path.join(os.getcwd(), "runs")
     batch_size: int = 64
     
     tokens_processing_budget: int = 327680000
